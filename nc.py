@@ -109,12 +109,12 @@ def save_pic(sets, tpls, pics):
     while not pics.empty():
         try:
             p = pics.get(timeout=5)
-            file_dir = os.path.join(".", "download", p["title"].encode("u8"))
+            file_dir = os.path.join(".", "download", p["title"])
             p_resp = http.request("GET", p["url"])
-            file_path = os.path.join(file_dir, "%s_%s%s" % (p["set"], p["n"], os.path.splitext(p["url"])[1]))
+            file_path = os.path.join(file_dir, "%s_%s%s" % (p["set"], p["n"], os.path.splitext(p["url"])[1])).encode("u8")
             with open(file_path, "wb") as wf:
                 wf.write(p_resp.data)
-        except (Exception, Queue.Empty) as ex:
+        except (Queue.Empty, Exception) as ex:
             print ex
             continue
     print os.getppid()
@@ -133,9 +133,9 @@ def cm(m=None, p=5):
     sets, tpls, pics = mg.Queue(), mg.Queue(), mg.Queue()
     for i in ci:
         ci_title, ci_href = els[i]
-        sets.put({"title": title, "set": ci_title, "url": ci_href})
+        sets.put({"title": title, "set": "%s.%s" % (i+1, ci_title), "url": ci_href})
 
-    file_dir = os.path.join(".", "download", ci_title.encode("u8"))
+    file_dir = os.path.join(".", "download", title).encode("u8")
     try:
         os.makedirs(file_dir)
     except OSError:
