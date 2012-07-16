@@ -1,18 +1,38 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+"""
+有妖气动漫采集脚本
+  Feature:
+    - 按照指定动漫采集
+    - 可批量采集多集(sets)
+    - 采集采用多进程并发，可手工指定并发数(-p)
+    - 通过urllib3，实现对多个Http Connection的复用
+    - 页面元素抓取采用lxml，以支持XPath方式抓取
+    - 对于多次类别抓取进行缓存，以提高抓取速度
+
+  TODO:
+    - 目录规整，使得抓取过来的目录有序
+
+"""
+
 from __future__ import with_statement
+
+__author__ = "dreampuf<soddyque@gmail.com>"
+__website__ = "https://github.com/dreampuf/comic.getter"
+
 import os
 import sys
 import time
 import argparse
-import urllib2
-import contextlib
 import cPickle as pickle
 import atexit
 
 import urllib3
 from lxml import etree
+from billiard import Pool
+from billiard import Queue
+from billiard import Manager
 
 try:
     with open(".cache", "rb") as f:
@@ -21,7 +41,6 @@ except (IOError, EOFError, pickle.UnpicklingError):
     _cache = {}
 
 def dumpcache():
-    print "Exit"
     with open(".cache", "wb") as f:
         pickle.dump(_cache, f)
 atexit.register(dumpcache)
@@ -30,12 +49,12 @@ fetcher = urllib3.PoolManager()
 def fetch(url, cache=True):
     ret = None
     if cache and url in _cache:
-        ret = _cache.get(url)
-    else:
-        #with contextlib.closing(urllib2.urlopen(url, timeout=5)) as f:
-        resp = fetcher.request('GET', url)
-        ret = resp.data
-        _cache[url] = ret
+        rtime, ret = _cache.get(url)
+        if time.time() - rtime < 3600: return ret #只缓存一个小时内的操作
+
+    resp = fetcher.request('GET', url)
+    ret = resp.data
+    _cache[url] = (time.time(), ret)
     return ret
 
 def formatipt(ipt):
@@ -59,10 +78,6 @@ def formatipt(ipt):
 
     return result.keys()
 
-from billiard import Pool
-from billiard import Queue
-from billiard import Manager
-from urllib import urlretrieve
 
 def save_pic(sets, tpls, pics):
     http = urllib3.PoolManager()
@@ -118,7 +133,6 @@ def cm(m=None, p=5):
     sets, tpls, pics = mg.Queue(), mg.Queue(), mg.Queue()
     for i in ci:
         ci_title, ci_href = els[i]
-        print ci_title
         sets.put({"title": title, "set": ci_title, "url": ci_href})
 
     file_dir = os.path.join(".", "download", ci_title.encode("u8"))

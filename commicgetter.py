@@ -55,12 +55,12 @@ def GetMain(dict):
     dict["url"] = "%s%s" % ("http://www.kkkmh.com", dict["url"])
     fs = urllib.urlopen(dict["url"])
     data = fs.read()
-    fs.close() 
+    fs.close()
 
     #fs = urllib.urlopen("http://www.kkkmh.com/manhua/common/server.js?v1290294109")
     #server = fs.read()
     #fs.close()
-    #match = re_packed.match(server) 
+    #match = re_packed.match(server)
     #print eval(match.group(1))
     #print unpacked(*eval(match.group(1)))
 
@@ -107,7 +107,7 @@ def main(url):
     #fs = open("test.html")
     data = fs.read()
     fs.close()
-    #print data 
+    #print data
     title = re_main_title.search(data).group(1)
 
     data = re_main_content.search(data).group()
@@ -131,9 +131,9 @@ def main(url):
     for i in user_choice:
         sumpic += len(GetMain(i)["pic_ls"])
 
-    
 
-    print "目标:%s\n总共下载%i集漫画,共%i张图." % (title, len(user_choice), sumpic) 
+
+    print "目标:%s\n总共下载%i集漫画,共%i张图." % (title, len(user_choice), sumpic)
 
 #下载模块
     from subprocess import Popen
@@ -205,12 +205,13 @@ def main(url):
             except Exception, ex:
                 #fails.append({"name":i["name"], "title":i["title"], "url": url})
                 print traceback.format_exc()
-                return 
+                return
             #pr("\r")
             #fl()
             #pr("当前下载进度%i/%i" % (n+1, tlen))
             #fl()
-        
+
+        #print i["pic_ls"]
         for n,l in enumerate(i["pic_ls"]):
             t = Thread(target=downloader, kwargs={"url": l, "path": str(n+1).rjust(plen, "0")})
             t.start()
@@ -220,7 +221,7 @@ def main(url):
             i.join()
 
    # 临时解决方案结束
-    
+
 
 #下载模块结束
 
@@ -234,7 +235,5 @@ def main(url):
 
 
 if __name__ == "__main__":
-    url = sys.argv[1] if len(sys.argv) > 1 else "http://www.kkkmh.com/manhua/0708/huo-ying-ren-zhe.html" 
+    url = sys.argv[1] if len(sys.argv) > 1 else "http://www.kkkmh.com/manhua/0708/huo-ying-ren-zhe.html"
     main(url)
-        #pic_src("2f636f6d696364617461332f6e2f6e617275746f2f3030392f3030332e6a7067")
-        #GetMain(1)
