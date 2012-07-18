@@ -30,7 +30,7 @@ import atexit
 
 import urllib3
 from lxml import etree
-from billiard import Process
+from billiard import Pool
 from billiard import Queue
 from billiard import Manager
 
@@ -81,20 +81,15 @@ def formatipt(ipt):
 
 def save_pic(sets, tpls, pics, timeout=1):
     http = urllib3.PoolManager()
-    while not sets.empty():
-        try:
-            s = sets.get(timeout=timeout)
-            s_url = s["url"]
-            s_resp = http.request("GET", s_url)
-            s_tree = etree.HTML(s_resp.data)
-            pics.put({"url": s_tree.xpath('//*[@id="SS_cur_pic"]')[0].get('value'), "title": s["title"], "set": s["set"], "n": 1})
+    s = sets
+    s_url = s["url"]
+    s_resp = http.request("GET", s_url)
+    s_tree = etree.HTML(s_resp.data)
+    pics.put({"url": s_tree.xpath('//*[@id="SS_cur_pic"]')[0].get('value'), "title": s["title"], "set": s["set"], "n": 1})
 
-            href_pre = s_url[:s_url.rfind(".")]
-            for n, i in enumerate(s_tree.xpath('//*[@id="comicShow_1"]/option[not(@selected)]'), 2):
-                tpls.put({"title": s["title"], "set": s["set"], "n": n, "url": "%s_i%s.html" % (href_pre, i.get("value"))})
-
-        except Queue.Empty:
-            continue
+    href_pre = s_url[:s_url.rfind(".")]
+    for n, i in enumerate(s_tree.xpath('//*[@id="comicShow_1"]/option[not(@selected)]'), 2):
+        tpls.put({"title": s["title"], "set": s["set"], "n": n, "url": "%s_i%s.html" % (href_pre, i.get("value"))})
 
     while not tpls.empty():
         try:
@@ -119,57 +114,59 @@ def save_pic(sets, tpls, pics, timeout=1):
             print ex
             continue
 
-def cm(m=None, p=5, u=False):
+    print os.getpid()
+
+def cm(m=None, p=5, u=""):
     ct = fetch(m)
     t = etree.HTML(ct)
     title = ''.join(t.xpath('//*[@id="workinfo"]/h1/text()')).strip()
-    els = [(i.text, i.get("href")) for i in t.xpath('//*[@id="chapterlist"]/ul/li/a')]
+    els = [(i.get("title")[:-11], i.get("href")) for i in t.xpath('//*[@id="chapterlist"]/ul/li/a')]
     for n, (e, _) in enumerate(els):
         print "%s." % n, e
     ci_pure = raw_input("输入对应集数序号,多集使用逗号分开,连续使用\"-\"分割 eg. 1\n4,6,7\n1-10,14-75\n请选择册:")
     ci = formatipt(ci_pure)
     
     mg = Manager()
-    sets, tpls, pics = mg.Queue(), mg.Queue(), mg.Queue()
+    tasks, tpls, pics = [], mg.Queue(), mg.Queue()
     for i in ci:
         ci_title, ci_href = els[i]
-        sets.put({"title": title, "set": "%s.%s" % (i+1, ci_title), "url": ci_href})
+        tasks.append(({"title": title, "set": "%s.%s" % (i+1, ci_title), "url": ci_href}, tpls, pics))
 
     file_dir = os.path.join(".", "download", title).encode("u8")
     try:
-        os.makedirs(file_dir)
+        if not os.path.exists(file_dir): os.makedirs(file_dir)
     except OSError:
         pass
-    #p = Pool(p)
-    #ret = p.apply_async(save_pic, (sets, tpls, pics))
-    ps = [Process(target=save_pic, args=(sets, tpls, pics)) for i in xrange(min(p, len(ci)))]
-    for i in ps:
-        i.start()
+    #use manual processes
+    #ps = [Process(target=save_pic, args=(sets, tpls, pics)) for i in xrange(min(p, len(ci)))]
+    #for i in ps:
+    #    i.start()
+    p = Pool(processes=p)
+    ret = p.starmap_async(save_pic, tasks) #if p.map_async don't forget p.close()
     out = sys.stdout
     try: 
-        while sets.qsize() or tpls.qsize() or pics.qsize():
+        while not ret.ready():
             #print sets.qsize(), tpls.qsize(), pics.qsize()
-            out.write("\r%s,%s,%s" % (sets.qsize(), tpls.qsize(), pics.qsize()))
+            out.write("\r%s,%s" % (tpls.qsize(), pics.qsize()))
             out.flush()
             time.sleep(.5)
-        #for i in ps:
-        #    i.join()
     except KeyboardInterrupt:
-        for i in ps:
-            i.terminate()
         print "已停止下载"
         return
+    finally:
+        p.join()
 
     print "下载完成"
 
     if not u: return
     #打包并上传
+    username, password = u.split(":")
     ci_str = map(str, ci)
     tfiles = ["%s/%s"%(dirpath, filename) for dirpath, dirs, files in os.walk(file_dir)
                                           for filename in files if filename[:filename.find(".")] in ci_str]
-    upfile(tfiles, file_dir[2:].replace(os.path.sep, "_") + "_" + ci_pure)
+    upfile(username, password, tfiles, file_dir[2:].replace(os.path.sep, "_") + "_" + ci_pure)
 
-def upfile(files, zip_name=None):
+def upfile(username, password, files, zip_name=None):
     "将指定文件压缩成为Zip并上传"
     
     if zip_name is None : zip_name = "upload"
@@ -193,14 +190,17 @@ def upfile(files, zip_name=None):
     resp = s.request("POST",
             "https://passport.115.com/?ac=login",
             data={
-                "login[account]": "YOURNAME",
-                "login[passwd]": "YOURPASSWORD",
+                "login[account]": username,
+                "login[passwd]": password,
                 "login[time]": "true"
             })
     resp = s.request("GET", "http://115.com")
-    user_cookie = re.search("var USER_COOKIE = [\"']([^'\"]+)[\"'];", resp.text).group(1)
-    user_rsa1 = re.search("Core.CONFIG.FUpRsa1 = [\"']([^\"']+)[\"'];", resp.text).group(1)
-    user_rsa2 = re.search("Core.CONFIG.FUpRsa2 = [\"']([^\"']+)[\"'];", resp.text).group(1)
+    try:
+        user_cookie = re.search("var USER_COOKIE = [\"']([^'\"]+)[\"'];", resp.text).group(1)
+        user_rsa1 = re.search("Core.CONFIG.FUpRsa1 = [\"']([^\"']+)[\"'];", resp.text).group(1)
+        user_rsa2 = re.search("Core.CONFIG.FUpRsa2 = [\"']([^\"']+)[\"'];", resp.text).group(1)
+    except AttributeError:
+        print "Error Account.."
 
     token_time = str(int(time.time()*1000))
     file_size = os.path.getsize(zip_name)
@@ -216,7 +216,7 @@ def upfile(files, zip_name=None):
                 "time": token_time,
                 "Upload": "Submit Query",
             }, files={
-                "Filedata": (zip_name, open(zip_name)),
+                "Filedata": (zip_name.decode("u8"), open(zip_name)),
             }, headers={
                 "user-agent": "Adobe Flash Player 11",
                 "x-flash-version": "11,3,300,265",
@@ -229,11 +229,11 @@ def upfile(files, zip_name=None):
 parser = argparse.ArgumentParser()
 parser.add_argument("-m", type=str, default=None, action="store", dest="m", help="采集漫画地址")
 parser.add_argument("-p", type=int, default=5, action="store", dest="p", help="采集并发数")
-parser.add_argument("-u", type=bool, default=False, action="store", dest="u", help="压缩并上传到指定分享空间")
+parser.add_argument("-u", type=str, default="", action="store", dest="u", help="指定空间账户，压缩并上传到指定分享空间（USERNAME:PASSWORD）")
 
 if __name__ == "__main__":
     ret = parser.parse_args()
     cm(**vars(ret))
-    #upfile(["%s/%s" % (dirpath, filename) for dirpath, dirs, files in os.walk("download/") for filename in files if filename[-3:] == "jpg"], "ss")
+    #upfile(["%s/%s" % (dirpath, filename) for dirpath, dirs, files in os.walk("download/") for filename in files if filename[-3:] == "jpg"][:10], "ss")
 
 
