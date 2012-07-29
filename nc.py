@@ -33,6 +33,9 @@ from lxml import etree
 from billiard import Pool
 from billiard import Queue
 from billiard import Manager
+from billiard import log_to_stderr
+from billiard import cpu_count
+logger = log_to_stderr()
 
 try:
     with open(".cache", "rb") as f:
@@ -78,45 +81,56 @@ def formatipt(ipt):
 
     return result.keys()
 
+def formatipt(ipt):
+    for i in ipt.split(","):
+        if "-" in i:
+            for n in xrange(*map(int, i.split("-"))):
+                yield n
+        else:
+            yield int(i) - 1
 
-def save_pic(sets, tpls, pics, timeout=1):
+def save_pic(tasks, timeout=1):
     http = urllib3.PoolManager()
-    s = sets
-    s_url = s["url"]
-    s_resp = http.request("GET", s_url)
-    s_tree = etree.HTML(s_resp.data)
-    pics.put({"url": s_tree.xpath('//*[@id="SS_cur_pic"]')[0].get('value'), "title": s["title"], "set": s["set"], "n": 1})
+    while not tasks.empty():
+        try :
+            try :
+                task = tasks.get(timeout=1)
+            except Queue.Empty:
+                continue
+            print " Worker:" , os.getpid(), task
+            if task["type"] == "sets":
+                s = task
+                s_url = s["url"]
+                s_resp = http.request("GET", s_url)
+                s_tree = etree.HTML(s_resp.data)
+                tasks.put({"type": "pics", "url": s_tree.xpath('//*[@id="SS_cur_pic"]')[0].get('value'), "title": s["title"], "set": s["set"], "n": 1})
+                href_pre = s_url[:s_url.rfind(".")]
+                for n, i in enumerate(s_tree.xpath('//*[@id="comicShow_1"]/option[not(@selected)]'), 2):
+                    tasks.put({"type": "tpls", "title": s["title"], "set": s["set"], "n": n, "url": "%s_i%s.html" % (href_pre, i.get("value"))})
+            
+            elif task["type"] == "tpls":
+                t = task
+                t_resp = http.request("GET", t["url"])
+                t_tree = etree.HTML(t_resp.data)
+                tasks.put({"type": "pics", "title" : t["title"], "set": t["set"], "n": t["n"], "url": t_tree.xpath('//*[@id="SS_cur_pic"]')[0].get('value')})
 
-    href_pre = s_url[:s_url.rfind(".")]
-    for n, i in enumerate(s_tree.xpath('//*[@id="comicShow_1"]/option[not(@selected)]'), 2):
-        tpls.put({"title": s["title"], "set": s["set"], "n": n, "url": "%s_i%s.html" % (href_pre, i.get("value"))})
+            elif task["type"] == "pics": 
+                try:
+                    p = task
+                    file_dir = os.path.join(".", "download", p["title"])
+                    p_resp = http.request("GET", p["url"])
+                    file_path = os.path.join(file_dir, "%s_%s%s" % (p["set"], p["n"], os.path.splitext(p["url"])[1])).encode("u8")
+                    with open(file_path, "wb") as wf:
+                        wf.write(p_resp.data)
+                except (Exception, ) as ex:
+                    print ex
+        except Exception, e:
+            print e
+            return True
+    return True
 
-    while not tpls.empty():
-        try:
-            t = tpls.get(timeout=timeout)
-            t_resp = http.request("GET", t["url"])
-            t_tree = etree.HTML(t_resp.data)
-            pics.put({"title" : t["title"], "set": t["set"], "n": t["n"], "url": t_tree.xpath('//*[@id="SS_cur_pic"]')[0].get('value')})
 
-        except Queue.Empty:
-            continue
-
-    while not pics.empty():
-        try:
-            #print "Worker", os.getpid()
-            p = pics.get(timeout=timeout)
-            file_dir = os.path.join(".", "download", p["title"])
-            p_resp = http.request("GET", p["url"])
-            file_path = os.path.join(file_dir, "%s_%s%s" % (p["set"], p["n"], os.path.splitext(p["url"])[1])).encode("u8")
-            with open(file_path, "wb") as wf:
-                wf.write(p_resp.data)
-        except (Queue.Empty, Exception) as ex:
-            print ex
-            continue
-
-    print os.getpid()
-
-def cm(m=None, p=5, u=""):
+def cm(m =None, p=5, u="", **kw):
     ct = fetch(m)
     t = etree.HTML(ct)
     title = ''.join(t.xpath('//*[@id="workinfo"]/h1/text()')).strip()
@@ -127,10 +141,10 @@ def cm(m=None, p=5, u=""):
     ci = formatipt(ci_pure)
     
     mg = Manager()
-    tasks, tpls, pics = [], mg.Queue(), mg.Queue()
+    tasks = mg.Queue()
     for i in ci:
         ci_title, ci_href = els[i]
-        tasks.append(({"title": title, "set": "%s.%s" % (i+1, ci_title), "url": ci_href}, tpls, pics))
+        tasks.put({"type": "sets", "title": title, "set": "%s.%s" % (i+1, ci_title), "url": ci_href})
 
     file_dir = os.path.join(".", "download", title).encode("u8")
     try:
@@ -141,34 +155,41 @@ def cm(m=None, p=5, u=""):
     #ps = [Process(target=save_pic, args=(sets, tpls, pics)) for i in xrange(min(p, len(ci)))]
     #for i in ps:
     #    i.start()
-    p = Pool(processes=p)
-    ret = p.starmap_async(save_pic, tasks) #if p.map_async don't forget p.close()
+    cpu_p = cpu_count()
+    realy_p = min(tasks.qsize(), p)
+    p = Pool(processes=realy_p)
+    result = [p.apply_async(save_pic, (tasks, )) for i in xrange(realy_p)] #if p.map_async don't forget p.close()
     out = sys.stdout
     try: 
-        while not ret.ready():
-            #print sets.qsize(), tpls.qsize(), pics.qsize()
-            out.write("\r%s,%s" % (tpls.qsize(), pics.qsize()))
+        while not all([i.ready() for i in result]):
+            print [i.is_alive() for i in p._pool]
+            out.write("\r%d" % (max(tasks.qsize(), sum([1 for i in result if i.ready()]))))
             out.flush()
             time.sleep(.5)
+            #dynamic set worker number
+            if len(result) < cpu_p * 2:
+                result.append(p.apply_async(save_pic, (tasks, ))) # for _ in xrange(min(realy_p, tasks.qsize()))])
+                p.grow()
     except KeyboardInterrupt:
         print "已停止下载"
-        return
+        #return
     finally:
-        p.join()
+        p.close()
 
     print "下载完成"
 
     if not u: return
-    #打包并上传
+    #压缩并上传
+    zip_name = file_dir[2:].replace(os.path.sep, "_") + "_" + ci_pure
     username, password = u.split(":")
     ci_str = map(str, ci)
     tfiles = ["%s/%s"%(dirpath, filename) for dirpath, dirs, files in os.walk(file_dir)
                                           for filename in files if filename[:filename.find(".")] in ci_str]
-    upfile(username, password, tfiles, file_dir[2:].replace(os.path.sep, "_") + "_" + ci_pure)
+    zip_files(tfiles, zip_name)
+    upfile(username, password, zip_name)
 
-def upfile(username, password, files, zip_name=None):
-    "将指定文件压缩成为Zip并上传"
-    
+def zip_files(files, zip_name=None):
+    "将指定文件压缩成为Zip"
     if zip_name is None : zip_name = "upload"
     zip_name = zip_name + ".zip"
     print "正在打包 %s ..." % zip_name
@@ -178,6 +199,9 @@ def upfile(username, password, files, zip_name=None):
         zpf.write(i)
     zpf.close()
     print "打包完毕 %s" % zip_name
+
+def upfile(username, password, zip_name=None):
+    "上传"
 
     print "正在登录115.com"
     import re
@@ -230,10 +254,15 @@ parser = argparse.ArgumentParser()
 parser.add_argument("-m", type=str, default=None, action="store", dest="m", help="采集漫画地址")
 parser.add_argument("-p", type=int, default=5, action="store", dest="p", help="采集并发数")
 parser.add_argument("-u", type=str, default="", action="store", dest="u", help="指定空间账户，压缩并上传到指定分享空间（USERNAME:PASSWORD）")
+parser.add_argument("-z", type=str, default=None, action="store", dest="z", help="只上传指定zip文件，不进行下载和压缩动作")
 
 if __name__ == "__main__":
     ret = parser.parse_args()
-    cm(**vars(ret))
+    if ret.z:
+        username, password = ret.u.split(":")
+        upfile(username, password, ret.z)
+    else:
+        cm(**vars(ret))
     #upfile(["%s/%s" % (dirpath, filename) for dirpath, dirs, files in os.walk("download/") for filename in files if filename[-3:] == "jpg"][:10], "ss")
 
 
