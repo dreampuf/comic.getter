@@ -89,45 +89,38 @@ def formatipt(ipt):
         else:
             yield int(i) - 1
 
-def save_pic(tasks, timeout=1):
+def save_pic(task, timeout=1):
     http = urllib3.PoolManager()
-    while not tasks.empty():
-        try :
-            try :
-                task = tasks.get(timeout=1)
-            except Queue.Empty:
-                continue
-            print " Worker:" , os.getpid(), task
-            if task["type"] == "sets":
-                s = task
-                s_url = s["url"]
-                s_resp = http.request("GET", s_url)
-                s_tree = etree.HTML(s_resp.data)
-                tasks.put({"type": "pics", "url": s_tree.xpath('//*[@id="SS_cur_pic"]')[0].get('value'), "title": s["title"], "set": s["set"], "n": 1})
-                href_pre = s_url[:s_url.rfind(".")]
-                for n, i in enumerate(s_tree.xpath('//*[@id="comicShow_1"]/option[not(@selected)]'), 2):
-                    tasks.put({"type": "tpls", "title": s["title"], "set": s["set"], "n": n, "url": "%s_i%s.html" % (href_pre, i.get("value"))})
-            
-            elif task["type"] == "tpls":
-                t = task
-                t_resp = http.request("GET", t["url"])
-                t_tree = etree.HTML(t_resp.data)
-                tasks.put({"type": "pics", "title" : t["title"], "set": t["set"], "n": t["n"], "url": t_tree.xpath('//*[@id="SS_cur_pic"]')[0].get('value')})
+    print " Worker:" , os.getpid()#, task
+    result = []
+    if task["type"] == "sets":
+        s = task
+        s_url = s["url"]
+        s_resp = http.request("GET", s_url)
+        s_tree = etree.HTML(s_resp.data)
+        result.append({"type": "pics", "url": s_tree.xpath('//*[@id="SS_cur_pic"]')[0].get('value'), "title": s["title"], "set": s["set"], "n": 1})
+        href_pre = s_url[:s_url.rfind(".")]
+        for n, i in enumerate(s_tree.xpath('//*[@id="comicShow_1"]/option[not(@selected)]'), 2):
+            result.append({"type": "tpls", "title": s["title"], "set": s["set"], "n": n, "url": "%s_i%s.html" % (href_pre, i.get("value"))})
+    
+    elif task["type"] == "tpls":
+        t = task
+        t_resp = http.request("GET", t["url"])
+        t_tree = etree.HTML(t_resp.data)
+        result.append({"type": "pics", "title" : t["title"], "set": t["set"], "n": t["n"], "url": t_tree.xpath('//*[@id="SS_cur_pic"]')[0].get('value')})
 
-            elif task["type"] == "pics": 
-                try:
-                    p = task
-                    file_dir = os.path.join(".", "download", p["title"])
-                    p_resp = http.request("GET", p["url"])
-                    file_path = os.path.join(file_dir, "%s_%s%s" % (p["set"], p["n"], os.path.splitext(p["url"])[1])).encode("u8")
-                    with open(file_path, "wb") as wf:
-                        wf.write(p_resp.data)
-                except (Exception, ) as ex:
-                    print ex
-        except Exception, e:
-            print e
-            return True
-    return True
+    elif task["type"] == "pics": 
+        try:
+            p = task
+            file_dir = os.path.join(".", "download", p["title"])
+            p_resp = http.request("GET", p["url"])
+            file_path = os.path.join(file_dir, "%s_%s%s" % (p["set"], p["n"], os.path.splitext(p["url"])[1])).encode("u8")
+            with open(file_path, "wb") as wf:
+                wf.write(p_resp.data)
+        except (Exception, ) as ex:
+            print ex
+
+    return result
 
 
 def cm(m =None, p=5, u="", **kw):
@@ -140,11 +133,11 @@ def cm(m =None, p=5, u="", **kw):
     ci_pure = raw_input("输入对应集数序号,多集使用逗号分开,连续使用\"-\"分割 eg. 1\n4,6,7\n1-10,14-75\n请选择册:")
     ci = formatipt(ci_pure)
     
-    mg = Manager()
-    tasks = mg.Queue()
+    #mg = Manager()
+    tasks = []
     for i in ci:
         ci_title, ci_href = els[i]
-        tasks.put({"type": "sets", "title": title, "set": "%s.%s" % (i+1, ci_title), "url": ci_href})
+        tasks.append({"type": "sets", "title": title, "set": "%s.%s" % (i+1, ci_title), "url": ci_href})
 
     file_dir = os.path.join(".", "download", title).encode("u8")
     try:
@@ -155,26 +148,25 @@ def cm(m =None, p=5, u="", **kw):
     #ps = [Process(target=save_pic, args=(sets, tpls, pics)) for i in xrange(min(p, len(ci)))]
     #for i in ps:
     #    i.start()
-    cpu_p = cpu_count()
-    realy_p = min(tasks.qsize(), p)
-    p = Pool(processes=realy_p)
-    result = [p.apply_async(save_pic, (tasks, )) for i in xrange(realy_p)] #if p.map_async don't forget p.close()
+    pool = Pool(processes=p)
+    result = pool.map_async(save_pic, tasks) #for i in xrange(realy_p)] #if p.map_async don't forget p.close()
     out = sys.stdout
     try: 
-        while not all([i.ready() for i in result]):
-            print [i.is_alive() for i in p._pool]
-            out.write("\r%d" % (max(tasks.qsize(), sum([1 for i in result if i.ready()]))))
+        while True:
+            if result.ready():
+                tasks = []
+                for ret in result.get():
+                    tasks.extend(ret)
+                if not tasks: break
+                result = pool.map_async(save_pic, tasks) #for i in xrange(realy_p)] #if p.map_async don't forget p.close()
+            out.write("\r%d" % (len(tasks)))
             out.flush()
             time.sleep(.5)
-            #dynamic set worker number
-            if len(result) < cpu_p * 2:
-                result.append(p.apply_async(save_pic, (tasks, ))) # for _ in xrange(min(realy_p, tasks.qsize()))])
-                p.grow()
     except KeyboardInterrupt:
         print "已停止下载"
         #return
     finally:
-        p.close()
+        pool.close()
 
     print "下载完成"
 
