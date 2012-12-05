@@ -94,10 +94,8 @@ def formatInput(input):
 
     return result.keys()
 
-total_size = 0
-
 re_main = re.compile("http://www.kkkmh.com/manhua/.+", re.IGNORECASE)
-re_main_title = re.compile('<title>(.+?)漫画-', re.IGNORECASE)
+re_main_title = re.compile("comic_name = '([^']+)';", re.IGNORECASE)
 re_main_content = re.compile('<div class="onlinedm">(.+)</div><div class="commentlist box"', re.IGNORECASE)
 re_main_li = re.compile('<li><a href="(?P<url>[^"]+)" title="(?P<title>[^"]+)" target="_blank".*?>(?P<name>[^<]+)</a></li>', re.IGNORECASE)
 def main(url):
@@ -135,60 +133,33 @@ def main(url):
 
     print "目标:%s\n总共下载%i集漫画,共%i张图." % (title, len(user_choice), sumpic)
 
-#下载模块
-    from subprocess import Popen
-
-    if sumpic < 10:
-        max_process = 1
-    elif sumpic < 100:
-        max_process = 5
-    else:
-        max_process = 10
+    #下载模块
 
     # 临时解决方案
-    alock = Lock()
     def showprocess(strs):
         pr("\r")
         pr(strs)
         fl()
 
-    fails = []
     for i in user_choice:
         print "当前下载:%s-%s" % (title, i["name"])
         tlen = len(i["pic_ls"])
         plen = len(str(tlen))
         dir_path = os.path.join(title, i["name"])
         thread_pool = []
-        global total_size
-        total_size = 0
         files = {}
+        files_total = {}
 
-        #class Downloader(Thread):
-        #    def __init__(self, *args, **kw):
-        #        self.data = {}
-        #        super(Thread, self).__init__(*args, **kw)
         def cur_printer(filename):
             def _cur_printer(loaded_num, chuck, size):
-                global total_size
-                if not filename in files:
-                    files[filename] = 0
                 files[filename] = loaded_num * chuck
-
-                if total_size > 0:
-                    showprocess("当前下载进度%.2f%%" % (sum(files.values())/float(total_size), ))
+                files_total[filename] = size
+                showprocess("当前下载进度%.2f%%" % (sum(files.values())*100/float(sum(files_total.values())), ))
 
             return _cur_printer
 
         def downloader(url, path):
             try:
-                #fs = urllib.urlopen(url)
-                #if not os.path.exists(dir_path):
-                #    os.makedirs(dir_path)
-                #bs = open(os.path.join(dir_path, "%s%s" % (path, url[url.rindex('.'):])), "w")
-                #bs.write(fs.read())
-                #bs.close()
-                #fs.close()
-                global total_size
                 full_path = os.path.join(dir_path, "%s%s" % (path, url[url.rindex("."):]))
                 if not os.path.exists(dir_path):
                     try:
@@ -197,21 +168,13 @@ def main(url):
                         pass
                 try:
                     filename, headers = urllib.urlretrieve(url, full_path, cur_printer(path))
-                    if "Content-Length" in headers:
-                        total_size += int(headers["Content-Length"])
                 except:
                     pass
 
             except Exception, ex:
-                #fails.append({"name":i["name"], "title":i["title"], "url": url})
                 print traceback.format_exc()
                 return
-            #pr("\r")
-            #fl()
-            #pr("当前下载进度%i/%i" % (n+1, tlen))
-            #fl()
 
-        #print i["pic_ls"]
         for n,l in enumerate(i["pic_ls"]):
             t = Thread(target=downloader, kwargs={"url": l, "path": str(n+1).rjust(plen, "0")})
             t.start()
@@ -220,18 +183,7 @@ def main(url):
         for i in thread_pool:
             i.join()
 
-   # 临时解决方案结束
-
-
-#下载模块结束
-
     print "\n下载完成,已下载到脚本执行目录"
-
-
-    #ts = open("gg.txt", "w")
-    #ts.write(str(user_choice))
-    #ts.close()
-
 
 
 if __name__ == "__main__":
