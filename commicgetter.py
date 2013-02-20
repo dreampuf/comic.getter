@@ -97,7 +97,7 @@ def formatInput(input):
 re_main = re.compile("http://www.kkkmh.com/manhua/.+", re.IGNORECASE)
 re_main_title = re.compile("comic_name = '([^']+)';", re.IGNORECASE)
 re_main_content = re.compile('<div class="onlinedm">(.+)</div><div class="commentlist box"', re.IGNORECASE)
-re_main_li = re.compile('<li><a href="(?P<url>[^"]+)" title="(?P<title>[^"]+)" target="_blank".*?>(?P<name>[^<]+)</a></li>', re.IGNORECASE)
+re_main_li = re.compile('<li><a href="(?P<url>[^"]+)" title="(?P<title>[^"]+)" target="_blank"[^>]*?>(?P<name>[^<]+)</a></li>', re.IGNORECASE)
 def main(url):
     assert re_main.search(url) != None, "必须为可靠的kkkmh.com漫画刊物页链接"
 
@@ -128,8 +128,6 @@ def main(url):
     sumpic = 0
     for i in user_choice:
         sumpic += len(GetMain(i)["pic_ls"])
-
-
 
     print "目标:%s\n总共下载%i集漫画,共%i张图." % (title, len(user_choice), sumpic)
 
